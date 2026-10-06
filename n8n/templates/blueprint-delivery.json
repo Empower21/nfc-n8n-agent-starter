@@ -1,0 +1,554 @@
+{
+  "name": "Email HTML automation blueprints with n8n workflow attachments via Gmail",
+  "active": false,
+  "nodes": [
+    {
+      "id": "5c2e9d14-3f7a-4c61-8b20-6e4a9b000001",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -100
+      ],
+      "parameters": {
+        "content": "## Email HTML automation blueprints with n8n workflow attachments via Gmail\n\nEmail an HTML automation blueprint to a lead with a ready-to-import n8n workflow attached, and get a copy yourself for follow-up.\n\n### Who's it for\n\nConsultants and agencies who generate reports or automation plans in a web app.\n\n### How it works\n\n1. A webhook receives the recipient, an HTML report, a Markdown copy and an n8n workflow JSON string.\n2. A Code node validates every field, sanitizes the HTML and picks the recipient.\n3. The workflow JSON is checked to be valid and inactive, then attached as a file.\n4. `send-blueprint` emails the visitor and BCCs you. `build-request` goes only to you.\n5. The webhook returns a clear success or error.\n\n### Setup\n\nTakes about 10 minutes.\n\n1. In the Configuration node, set `ownerEmail` and `senderName`.\n2. Add a Gmail OAuth2 credential to both Gmail nodes.\n3. On the webhook, create a Header Auth credential (for example `x-webhook-secret`).\n4. POST a test request with `action`, `firstName`, `email`, `blueprintName`, `blueprintMarkdown`, `blueprintHtml` and `workflowJson`.\n\n### Requirements\n\n- Gmail account\n- A backend that builds the HTML with every value escaped. Never call this webhook from a browser: the Code node strips scripts and forms, but your server is the real safeguard.\n\n### Works with\n\nPairs with the \"Turn repetitive tasks into n8n automation blueprints with a Claude discovery agent\" template. Render its blueprint JSON as HTML on your server, then post it here.\n\n### How to customize the workflow\n\nSwap the Gmail nodes for Outlook or SMTP, add a CRM step after the owner email, or change the subject lines in the Validate + Format Lead node.",
+        "width": 460,
+        "height": 960,
+        "color": 1
+      }
+    },
+    {
+      "id": "5c2e9d14-3f7a-4c61-8b20-6e4a9b000002",
+      "name": "Section: Receive and validate",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        480,
+        -100
+      ],
+      "parameters": {
+        "content": "## 1. Receive and validate\nChecks the secret header and every field, then picks the recipient.",
+        "width": 900,
+        "height": 560,
+        "color": 7
+      }
+    },
+    {
+      "id": "5c2e9d14-3f7a-4c61-8b20-6e4a9b000003",
+      "name": "Section: Build the attachment",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1420,
+        -100
+      ],
+      "parameters": {
+        "content": "## 2. Build the attachment\nOnly inactive, importable workflow JSON becomes a file.",
+        "width": 700,
+        "height": 620,
+        "color": 7
+      }
+    },
+    {
+      "id": "5c2e9d14-3f7a-4c61-8b20-6e4a9b000005",
+      "name": "Warning: Server-side only",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        500,
+        -60
+      ],
+      "parameters": {
+        "content": "## Server-side only\nCall this webhook from your backend, never from a browser. Escape every value in `blueprintHtml` before sending.",
+        "width": 240,
+        "height": 420,
+        "color": 3
+      }
+    },
+    {
+      "id": "5c2e9d14-3f7a-4c61-8b20-6e4a9b000004",
+      "name": "Section: Send and confirm",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2160,
+        -100
+      ],
+      "parameters": {
+        "content": "## 3. Send and confirm\nVisitor gets the blueprint (you are BCC'd). Build requests go only to you.",
+        "width": 920,
+        "height": 620,
+        "color": 7
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "blueprint-delivery",
+        "responseMode": "responseNode",
+        "options": {},
+        "authentication": "headerAuth"
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        540,
+        200
+      ],
+      "id": "fbd72d8b-075e-46de-a8af-6ad3cdfa3f45",
+      "name": "Lead Webhook",
+      "webhookId": "af5f52cb-bc06-400f-aac8-345ae2e41693"
+    },
+    {
+      "id": "5c2e9d14-3f7a-4c61-8b20-6e4a9b000010",
+      "name": "Configuration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        760,
+        200
+      ],
+      "parameters": {
+        "mode": "manual",
+        "includeOtherFields": true,
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5c2e9d14-3f7a-4c61-8b20-6e4a9b000011",
+              "name": "ownerEmail",
+              "type": "string",
+              "value": "you@example.com"
+            },
+            {
+              "id": "5c2e9d14-3f7a-4c61-8b20-6e4a9b000012",
+              "name": "senderName",
+              "type": "string",
+              "value": "Automation Blueprints"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function sanitizeHtml(html) {\n  const blocked = 'script|iframe|frame|frameset|object|embed|applet|form|input|button|textarea|select|base';\n  return String(html)\n    .replace(new RegExp('<\\\\s*(' + blocked + ')\\\\b[\\\\s\\\\S]*?<\\\\s*\\\\/\\\\s*\\\\1\\\\s*>', 'gi'), '')\n    .replace(new RegExp('<\\\\s*\\\\/?\\\\s*(' + blocked + ')\\\\b[^>]*>', 'gi'), '')\n    .replace(/<\\s*meta\\b[^>]*http-equiv[^>]*>/gi, '')\n    .replace(/\\s+on[a-z]+\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)/gi, '')\n    .replace(/\\b(href|src|action|formaction)\\s*=\\s*([\"']?)\\s*(?:javascript|vbscript|data):[^\"'\\s>]*\\2/gi, '$1=\"#\"');\n}\n\nconst input = $input.first().json;\nconst body = input.body || {};\nconst fail = function (statusCode, error) { return [{ json: { valid: false, statusCode: statusCode, error: error } }]; };\nconst EMAIL = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n\nconst ownerEmail = String(input.ownerEmail || '').trim().toLowerCase();\nif (!EMAIL.test(ownerEmail) || ownerEmail === 'you@example.com') {\n  return fail(500, 'Set ownerEmail in the Configuration node.');\n}\n\nif (!body || typeof body !== 'object') {\n  return fail(400, 'Invalid request body.');\n}\n\nconst action = body.action;\nif (action !== 'send-blueprint' && action !== 'build-request') {\n  return fail(400, 'Invalid action.');\n}\n\nconst firstName = String(body.firstName || '').trim().replace(/[\\r\\n]+/g, ' ');\nconst email = String(body.email || '').trim().toLowerCase();\nconst blueprintName = String(body.blueprintName || (body.blueprint && body.blueprint.name) || '').trim().replace(/[\\r\\n]+/g, ' ');\nconst blueprintMarkdown = String(body.blueprintMarkdown || '').trim();\n\nif (!firstName || firstName.length > 80) {\n  return fail(400, 'Invalid first name.');\n}\nif (!EMAIL.test(email) || email.length > 200) {\n  return fail(400, 'Invalid email.');\n}\nif (!blueprintName || blueprintName.length > 120 || blueprintMarkdown.length < 20 || blueprintMarkdown.length > 30000) {\n  return fail(400, 'Complete blueprint content is required.');\n}\nif (typeof body.blueprintHtml !== 'string' || body.blueprintHtml.length < 50 || body.blueprintHtml.length > 200000) {\n  return fail(400, 'Complete blueprint content is required.');\n}\nconst blueprintHtml = sanitizeHtml(body.blueprintHtml);\n\n// Optional: where the request came from (a form, a QR code, an NFC tag, ...).\nconst sourceId = String((body.session && body.session.cardId) || body.source || 'unknown');\nconst capturedAt = String(body.capturedAt || new Date().toISOString());\nconst recipient = action === 'send-blueprint' ? email : ownerEmail;\nconst subject = action === 'send-blueprint'\n  ? 'Your automation blueprint: ' + blueprintName\n  : 'Build request: ' + firstName + ' (' + blueprintName + ')';\nconst message = action === 'send-blueprint'\n  ? 'Hi ' + firstName + ',\\n\\nHere is the automation blueprint you requested.\\n\\n' + blueprintMarkdown + '\\n\\nSource: ' + sourceId + '\\nRequested: ' + capturedAt + '\\n\\nReply to this email if you would like help building it.'\n  : 'Action: Build request\\nName: ' + firstName + '\\nEmail: ' + email + '\\nBlueprint: ' + blueprintName + '\\nSource: ' + sourceId + '\\nCaptured: ' + capturedAt + '\\n\\n' + blueprintMarkdown;\n\nreturn [{ json: {\n  valid: true,\n  statusCode: 200,\n  action: action,\n  firstName: firstName,\n  email: email,\n  blueprintName: blueprintName,\n  blueprintMarkdown: blueprintMarkdown,\n  blueprintHtml: blueprintHtml,\n  ownerEmail: ownerEmail,\n  recipient: recipient,\n  subject: subject,\n  message: message,\n  sourceId: sourceId,\n  capturedAt: capturedAt\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        200
+      ],
+      "id": "55ae1b8c-1bd5-4b28-81ae-d0db920603e3",
+      "name": "Validate + Format Lead"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "2dfe0c45-9074-4171-85e8-cee353750223",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1200,
+        200
+      ],
+      "id": "487177a6-b4c8-4896-86c9-744600523288",
+      "name": "Valid Request?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst webhookInput = $('Lead Webhook').first().json;\nconst body = webhookInput.body || {};\nconst workflowJson = String(body.workflowJson || '').trim();\nlet workflowFilename = String(body.workflowFilename || 'automation-n8n-workflow.json')\n  .trim()\n  .replace(/[^a-z0-9._-]+/gi, '-')\n  .replace(/^-+|-+$/g, '')\n  .slice(0, 120) || 'automation-n8n-workflow.json';\nif (!workflowFilename.toLowerCase().endsWith('.json')) workflowFilename += '.json';\n\nif (workflowJson.length < 100 || workflowJson.length > 200000) {\n  return [{ json: { valid: false, statusCode: 400, error: 'Complete n8n workflow JSON is required.' } }];\n}\n\nlet parsedWorkflow;\ntry {\n  parsedWorkflow = JSON.parse(workflowJson);\n} catch (e) {\n  return [{ json: { valid: false, statusCode: 400, error: 'Workflow attachment is not valid JSON.' } }];\n}\n\nif (!parsedWorkflow || typeof parsedWorkflow !== 'object' || parsedWorkflow.active !== false || !Array.isArray(parsedWorkflow.nodes) || parsedWorkflow.nodes.length < 2 || !parsedWorkflow.connections || typeof parsedWorkflow.connections !== 'object') {\n  return [{ json: { valid: false, statusCode: 400, error: 'Workflow attachment is not an importable inactive n8n workflow.' } }];\n}\n\nconst workflowBase64 = Buffer.from(workflowJson, 'utf8').toString('base64');\nconst attachmentNote = '\\n\\nAttached: ' + workflowFilename + '\\nImport it into n8n, add your own credentials, review each field marked SETUP, test it, and only then activate it.';\n\nreturn [{\n  json: Object.assign({}, item.json, {\n    valid: true,\n    workflowBase64: workflowBase64,\n    workflowFilename: workflowFilename,\n    subject: item.json.action === 'send-blueprint'\n      ? 'Your automation blueprint + n8n workflow: ' + item.json.blueprintName\n      : item.json.subject,\n    message: item.json.message + attachmentNote\n  })\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        120
+      ],
+      "id": "3b93d248-6c08-49a1-8750-ae1114270616",
+      "name": "Create Workflow Attachment"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a3651ead-5ccd-4eab-8f01-290ad5e1a06e",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        120
+      ],
+      "id": "0af6b08f-585c-481d-92ee-ac0447c33b81",
+      "name": "Attachment Valid?"
+    },
+    {
+      "parameters": {
+        "operation": "toBinary",
+        "sourceProperty": "workflowBase64",
+        "binaryPropertyName": "workflow",
+        "options": {
+          "fileName": "={{ $json.workflowFilename }}",
+          "mimeType": "application/json"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        1900,
+        0
+      ],
+      "id": "706018cb-16d7-4765-a609-5dd535846d78",
+      "name": "Workflow JSON to File"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: $json.error } }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        1900,
+        340
+      ],
+      "id": "ae03b609-7ae7-410f-8467-a5cba240382c",
+      "name": "Reject Request"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2200,
+        120
+      ],
+      "id": "5e0a4d2b-cf70-4af5-bc01-d5cc41593152",
+      "name": "Merge Email + File"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f8cb1f54-546c-4cfa-9cc5-36a41ffdf52b",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "send-blueprint",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2420,
+        120
+      ],
+      "id": "88a320d8-547e-4508-ad99-0e0f4dd8e27d",
+      "name": "Send Blueprint?"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.recipient }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $('Validate + Format Lead').first().json.blueprintHtml }}",
+        "options": {
+          "appendAttribution": false,
+          "bccList": "={{ $json.ownerEmail }}",
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {
+                "property": "workflow"
+              }
+            ]
+          },
+          "senderName": "={{ $('Configuration').first().json.senderName }}"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2640,
+        0
+      ],
+      "id": "36155f15-2e04-494a-89cb-c2d81d2e497c",
+      "name": "Email Blueprint to Visitor"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.recipient }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $('Validate + Format Lead').first().json.blueprintHtml }}",
+        "options": {
+          "appendAttribution": false,
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {
+                "property": "workflow"
+              }
+            ]
+          },
+          "senderName": "={{ $('Configuration').first().json.senderName }}"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2640,
+        260
+      ],
+      "id": "53708bee-219f-414c-bc00-c71894a3fcc5",
+      "name": "Email Build Request to Owner"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, action: 'send-blueprint', deliveredTo: $('Validate + Format Lead').item.json.email } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2880,
+        0
+      ],
+      "id": "18f9c3f9-d29a-498d-baf4-4b5e46330664",
+      "name": "Confirm Blueprint Delivery"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, action: 'build-request' } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        2880,
+        260
+      ],
+      "id": "9e0ce3af-2728-44a6-adc8-a2477714a1fb",
+      "name": "Confirm Build Request"
+    }
+  ],
+  "connections": {
+    "Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "Configuration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configuration": {
+      "main": [
+        [
+          {
+            "node": "Validate + Format Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate + Format Lead": {
+      "main": [
+        [
+          {
+            "node": "Valid Request?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Request?": {
+      "main": [
+        [
+          {
+            "node": "Create Workflow Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Workflow Attachment": {
+      "main": [
+        [
+          {
+            "node": "Attachment Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attachment Valid?": {
+      "main": [
+        [
+          {
+            "node": "Workflow JSON to File",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Email + File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reject Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Workflow JSON to File": {
+      "main": [
+        [
+          {
+            "node": "Merge Email + File",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Email + File": {
+      "main": [
+        [
+          {
+            "node": "Send Blueprint?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Blueprint?": {
+      "main": [
+        [
+          {
+            "node": "Email Blueprint to Visitor",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email Build Request to Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Blueprint to Visitor": {
+      "main": [
+        [
+          {
+            "node": "Confirm Blueprint Delivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Build Request to Owner": {
+      "main": [
+        [
+          {
+            "node": "Confirm Build Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

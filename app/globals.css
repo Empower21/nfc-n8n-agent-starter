@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+:root {
+  --paper: #f6f6f3;
+  --ink: #161a22;
+  --ink-soft: #4a5160;
+  --surface: #ffffff;
+  --line: rgba(22, 26, 34, 0.12);
+  --line-strong: rgba(22, 26, 34, 0.28);
+  --pulse: #d63a63;
+  --pulse-soft: rgba(214, 58, 99, 0.09);
+  --human: #a97614;
+  --human-soft: rgba(217, 162, 59, 0.14);
+  --ok: #2c7a4b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0c0f16;
+    --ink: #e9eaee;
+    --ink-soft: #9aa1b0;
+    --surface: #121724;
+    --line: rgba(233, 234, 238, 0.12);
+    --line-strong: rgba(233, 234, 238, 0.3);
+    --pulse: #ea4b71;
+    --pulse-soft: rgba(234, 75, 113, 0.12);
+    --human: #d9a23b;
+    --human-soft: rgba(217, 162, 59, 0.16);
+    --ok: #4cc27e;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-surface: var(--surface);
+  --color-pulse: var(--pulse);
+  --color-human: var(--human);
+  --font-display: var(--font-sora);
+  --font-sans: var(--font-instrument);
+  --font-mono: var(--font-plex-mono);
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-instrument), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+  font-family: var(--font-sora), system-ui, sans-serif;
+}
+
+.font-telemetry {
+  font-family: var(--font-plex-mono), ui-monospace, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.hairline {
+  border-color: var(--line);
+}
+
+/* ---------- NFC arc signature ---------- */
+
+@keyframes nfc-ripple {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+}
+
+.nfc-arc {
+  animation: nfc-ripple 2.8s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+  transform-origin: center;
+}
+
+.nfc-arc-2 {
+  animation-delay: 0.45s;
+}
+
+.nfc-arc-3 {
+  animation-delay: 0.9s;
+}
+
+/* ---------- Entry choreography ---------- */
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rise {
+  animation: rise-in 0.7s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+.rise-1 { animation-delay: 0.05s; }
+.rise-2 { animation-delay: 0.16s; }
+.rise-3 { animation-delay: 0.27s; }
+.rise-4 { animation-delay: 0.38s; }
+
+/* ---------- Typing indicator (arc echo) ---------- */
+
+@keyframes arc-beat {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
+.arc-beat span {
+  animation: arc-beat 1.1s ease-in-out infinite;
+}
+
+.arc-beat span:nth-child(2) { animation-delay: 0.18s; }
+.arc-beat span:nth-child(3) { animation-delay: 0.36s; }
+
+/* ---------- Blueprint reveal ---------- */
+
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translateY(26px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reveal-block {
+  animation: reveal-up 0.65s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+@keyframes spine-grow {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+.diagram-spine {
+  transform-origin: top;
+  animation: spine-grow 1.1s cubic-bezier(0.3, 0.6, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nfc-arc,
+  .rise,
+  .arc-beat span,
+  .reveal-block,
+  .diagram-spine {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Visible keyboard focus everywhere. */
+:focus-visible {
+  outline: 2px solid var(--pulse);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
