@@ -3,11 +3,17 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildTemplates,
+  LEAD_COLUMNS,
   overviewContent,
-  SANITIZE_HTML_SOURCE,
+  SLUG,
+  systemPrompt,
+  TITLE,
 } from "../scripts/build-n8n-templates.mjs";
+import { type Json, runCodeNode, SAMPLE_BLUEPRINT } from "./helpers/n8n-code-node";
 
-// Rules from the n8n Creator Hub template submission and sticky note guidelines.
+// Rules from the n8n Creator Hub template submission and sticky note
+// guidelines, plus behaviour tests that execute each Code node body the way
+// n8n does (top-level return, $input / $ helpers).
 
 interface WorkflowNode {
   name: string;
@@ -24,78 +30,118 @@ interface WorkflowExport {
   connections: Record<string, Record<string, { node: string }[][]>>;
 }
 
-const SLUGS = ["discovery-agent", "blueprint-delivery"] as const;
 const STICKY = "n8n-nodes-base.stickyNote";
+const workflow = JSON.parse(
+  readFileSync(resolve(process.cwd(), `n8n/templates/${SLUG}.json`), "utf8")
+) as WorkflowExport;
+const raw = JSON.stringify(workflow);
+const stickies = workflow.nodes.filter((n) => n.type === STICKY);
+const workNodes = workflow.nodes.filter((n) => n.type !== STICKY);
+const byName = (name: string) => {
+  const match = workflow.nodes.find((n) => n.name === name);
+  if (!match) throw new Error(`Missing node: ${name}`);
+  return match;
+};
+const words = (text: string) => text.split(/\s+/).filter(Boolean).length;
+const assignmentNames = (name: string) =>
+  (byName(name).parameters.assignments as { assignments: { name: string }[] }).assignments.map((a) => a.name);
 
-function load(slug: string): WorkflowExport {
-  return JSON.parse(
-    readFileSync(resolve(process.cwd(), `n8n/templates/${slug}.json`), "utf8")
-  ) as WorkflowExport;
-}
-
-function words(text: string): number {
-  return text.split(/\s+/).filter(Boolean).length;
-}
-
-describe.each(SLUGS)("n8n template: %s", (slug) => {
-  const workflow = load(slug);
-  const raw = JSON.stringify(workflow);
-  const stickies = workflow.nodes.filter((n) => n.type === STICKY);
-  const workNodes = workflow.nodes.filter((n) => n.type !== STICKY);
-  const overviews = stickies.filter((n) => n.parameters.color === 1);
-  const sections = stickies.filter((n) => n.parameters.color === 7);
-
+describe(`n8n template: ${SLUG}`, () => {
   it("is up to date with the build script", () => {
-    expect(workflow).toEqual(buildTemplates()[slug]);
+    expect(workflow).toEqual(buildTemplates()[SLUG]);
   });
 
   it("is inactive and uses a sentence-style title without emojis", () => {
     expect(workflow.active).toBe(false);
+    expect(workflow.name).toBe(TITLE);
     expect(workflow.name[0]).toMatch(/[A-Z]/);
     expect(workflow.name).not.toMatch(/\p{Extended_Pictographic}/u);
   });
 
   it("has exactly one top-left yellow overview sticky of 100-300 words", () => {
+    const overviews = stickies.filter((n) => n.parameters.color === 1);
     expect(overviews).toHaveLength(1);
     const [overview] = overviews;
     const content = String(overview.parameters.content);
-    expect(content).toBe(overviewContent(slug));
+    expect(content).toBe(overviewContent());
     expect(words(content)).toBeGreaterThanOrEqual(100);
     expect(words(content)).toBeLessThanOrEqual(300);
     expect(content).toContain("### How it works");
     expect(content).toContain("### Setup");
-    for (const node of workflow.nodes) {
-      expect(overview.position[0]).toBeLessThanOrEqual(node.position[0]);
-      expect(overview.position[1]).toBeLessThanOrEqual(node.position[1]);
+    for (const n of workflow.nodes) {
+      expect(overview.position[0]).toBeLessThanOrEqual(n.position[0]);
+      expect(overview.position[1]).toBeLessThanOrEqual(n.position[1]);
     }
   });
 
-  it("groups nodes with short white section stickies", () => {
-    expect(sections.length).toBeGreaterThan(0);
-    for (const section of sections) {
-      expect(words(String(section.parameters.content))).toBeLessThan(50);
+  it("groups nodes with short white section stickies and one red warning", () => {
+    const sections = stickies.filter((n) => n.parameters.color === 7);
+    expect(sections.length).toBeGreaterThanOrEqual(4);
+    for (const s of sections) expect(words(String(s.parameters.content))).toBeLessThan(50);
+    const warnings = stickies.filter((n) => n.parameters.color === 3);
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0].parameters.content)).toMatch(/anyone with the link/i);
+  });
+
+  it("is substantial enough to stand on its own", () => {
+    expect(workNodes.length).toBeGreaterThanOrEqual(15);
+    const types = new Set(workNodes.map((n) => n.type));
+    for (const type of [
+      "@n8n/n8n-nodes-langchain.chatTrigger",
+      "@n8n/n8n-nodes-langchain.agent",
+      "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "n8n-nodes-base.gmail",
+      "n8n-nodes-base.googleSheets",
+    ]) {
+      expect(types).toContain(type);
     }
   });
 
   it("ships without credentials, secrets or personal identifiers", () => {
-    for (const node of workflow.nodes) expect(node.credentials).toBeUndefined();
+    for (const n of workflow.nodes) expect(n.credentials).toBeUndefined();
     const emails = raw.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}/g) ?? [];
     expect(emails.filter((e) => !e.endsWith("@example.com"))).toEqual([]);
-    expect(raw).not.toMatch(/TTA_SECRET|SHARED_SECRET|Tap to Automate|tapped an NFC card|lib\/n8n/i);
+    expect(raw).not.toMatch(/TTA_SECRET|SHARED_SECRET|YOUR-INSTANCE|Tap to Automate|tapped an NFC card|lib\/n8n/i);
   });
 
-  it("protects every webhook with Header Auth instead of an inline secret", () => {
-    const webhooks = workNodes.filter((n) => n.type === "n8n-nodes-base.webhook");
-    expect(webhooks.length).toBeGreaterThan(0);
-    for (const webhook of webhooks) {
-      expect(webhook.parameters.authentication).toBe("headerAuth");
+  it("groups user settings in a Configuration Set node that passes the chat through", () => {
+    expect(byName("Configuration").type).toBe("n8n-nodes-base.set");
+    expect(byName("Configuration").parameters.includeOtherFields).toBe(true);
+    expect(assignmentNames("Configuration")).toEqual(["ownerEmail", "senderName", "brandName", "maxFollowUps"]);
+  });
+
+  it("wires the agent's model, memory and parser on ai_* connections", () => {
+    expect(workflow.connections["Anthropic Chat Model"].ai_languageModel[0][0].node).toBe("Discovery Agent");
+    expect(workflow.connections["Simple Memory"].ai_memory[0][0].node).toBe("Discovery Agent");
+    expect(workflow.connections["Structured Output"].ai_outputParser[0][0].node).toBe("Discovery Agent");
+    expect(workflow.connections["Fixer Model"].ai_languageModel[0][0].node).toBe("Structured Output");
+    expect(byName("Structured Output").parameters.autoFix).toBe(true);
+    expect(byName("Simple Memory").parameters.contextWindowLength).toBeGreaterThan(5);
+  });
+
+  it("ends both branches in a node that returns `output` to the chat", () => {
+    for (const name of ["Reply with Question", "Reply with Confirmation"]) {
+      expect(assignmentNames(name)).toEqual(["output"]);
+      expect(workflow.connections[name]).toBeUndefined();
     }
   });
 
-  it("groups user settings in a Configuration Set node", () => {
-    const config = workNodes.find((n) => n.name === "Configuration");
-    expect(config?.type).toBe("n8n-nodes-base.set");
-    expect(config?.parameters.includeOtherFields).toBe(true);
+  it("logs every lead column the description tells users to create", () => {
+    const columns = byName("Log Lead in Google Sheets").parameters.columns as { value: Json; schema: { id: string }[] };
+    expect(Object.keys(columns.value)).toEqual(LEAD_COLUMNS);
+    expect(columns.schema.map((c) => c.id)).toEqual(LEAD_COLUMNS);
+    expect(overviewContent()).toContain(LEAD_COLUMNS.join(", "));
+  });
+
+  it("only uses the intended expressions in the system prompt", () => {
+    const prompt = systemPrompt();
+    expect(prompt.match(/\{\{[^}]*\}\}/g)).toEqual([
+      "{{ $now.toFormat('DDDD') }}",
+      "{{ $('Configuration').first().json.maxFollowUps }}",
+    ]);
+    expect(prompt.replace(/\{\{[^}]*\}\}/g, "")).not.toMatch(/\{\{|\}\}/);
+    expect(byName("Discovery Agent").parameters.options).toEqual({ systemMessage: `=${prompt}` });
   });
 
   it("wires every connection to a real node and leaves no node orphaned", () => {
@@ -117,72 +163,119 @@ describe.each(SLUGS)("n8n template: %s", (slug) => {
   });
 });
 
-describe("blueprint-delivery template security", () => {
-  const workflow = load("blueprint-delivery");
-  const byName = (name: string) => {
-    const match = workflow.nodes.find((n) => n.name === name);
-    if (!match) throw new Error(`Missing node: ${name}`);
-    return match;
-  };
-  const sanitizeHtml = new Function(
-    `${SANITIZE_HTML_SOURCE}; return sanitizeHtml;`
-  )() as (html: string) => string;
-  // Runs the real Code node body with a stubbed $input, as n8n would.
-  const runValidate = (json: Record<string, unknown>) =>
-    (new Function("$input", String(byName("Validate + Format Lead").parameters.jsCode)) as (
-      input: unknown
-    ) => { json: Record<string, unknown> }[])({ first: () => ({ json }) })[0].json;
-  const sample = JSON.parse(
-    readFileSync(resolve(process.cwd(), "n8n/templates/blueprint-delivery.sample-request.json"), "utf8")
-  ) as Record<string, unknown>;
+describe("Code node: Enforce Contract", () => {
+  const contact = { firstName: "Sam", email: "Sam@Example.com" };
 
-  it("strips active content but keeps ordinary email markup", () => {
-    const dirty =
-      '<meta charset="utf-8"><p onclick="steal()" style="color:red">Hi</p>' +
-      "<script>alert(1)</script><iframe src=\"https://evil.test\"></iframe>" +
-      '<a href="javascript:alert(1)">bad</a><a href="https://ok.test">ok</a>' +
-      '<meta http-equiv="refresh" content="0;url=https://evil.test">' +
-      '<form action="https://evil.test"><input name="password"></form>';
-    const clean = sanitizeHtml(dirty);
-    expect(clean).not.toMatch(/<script|<iframe|<form|<input|onclick|javascript:|http-equiv/i);
-    expect(clean).toContain('<meta charset="utf-8">');
-    expect(clean).toContain('<p style="color:red">Hi</p>');
-    expect(clean).toContain('<a href="https://ok.test">ok</a>');
+  it("turns a question into a chat reply that lists quick replies", () => {
+    const out = runCodeNode("enforce-contract", {
+      output: {
+        status: "question",
+        message: "Which inbox?",
+        quickReplies: [{ label: "Gmail", value: "Gmail" }, { label: "Outlook", value: "Outlook" }],
+      },
+    });
+    expect(out).toEqual({
+      status: "question",
+      message: "Which inbox?",
+      chatReply: "Which inbox?\n\nYou could answer: Gmail · Outlook",
+    });
   });
 
-  it("emails only the sanitized HTML, never the raw request body", () => {
-    for (const name of ["Email Blueprint to Visitor", "Email Build Request to Owner"]) {
-      expect(byName(name).parameters.message).toBe(
-        "={{ $('Validate + Format Lead').first().json.blueprintHtml }}"
-      );
+  it("passes a complete blueprint with a valid contact", () => {
+    const out = runCodeNode("enforce-contract", {
+      output: { status: "blueprint", message: "Here it is.", contact, blueprint: SAMPLE_BLUEPRINT },
+    });
+    expect(out.status).toBe("blueprint");
+    expect(out.contact).toEqual({ firstName: "Sam", email: "sam@example.com" });
+    expect((out.blueprint as Json).name).toBe(SAMPLE_BLUEPRINT.name);
+  });
+
+  it("asks for contact details instead of delivering without them", () => {
+    for (const badContact of [undefined, { firstName: "Sam" }, { firstName: "Sam", email: "not-an-email" }]) {
+      const out = runCodeNode("enforce-contract", {
+        output: { status: "blueprint", message: "x", contact: badContact, blueprint: SAMPLE_BLUEPRINT },
+      });
+      expect(out.status).toBe("question");
+      expect(String(out.chatReply)).toMatch(/first name.*email/i);
     }
   });
 
-  it("warns users with a red sticky to call the webhook server-side only", () => {
-    const warning = workflow.nodes.find(
-      (n) => n.type === STICKY && n.parameters.color === 3
+  it("falls back to a safe question on agent errors or garbage", () => {
+    for (const input of [
+      { error: "boom" },
+      { output: "not json" },
+      { output: { status: "blueprint", contact, blueprint: { name: "x" } } },
+    ]) {
+      expect(runCodeNode("enforce-contract", input).status).toBe("question");
+    }
+  });
+
+  it("unwraps JSON the model returned as a fenced string", () => {
+    const out = runCodeNode("enforce-contract", { output: '```json\n{"status":"question","message":"Hi?"}\n```' });
+    expect(out.message).toBe("Hi?");
+  });
+});
+
+describe("Code node: Build n8n Starter Workflow", () => {
+  const out = runCodeNode("build-starter-workflow", { status: "blueprint", blueprint: SAMPLE_BLUEPRINT, contact: {} });
+  const generated = JSON.parse(String(out.workflowJson));
+
+  it("produces an inactive, credential-free, importable workflow", () => {
+    expect(generated.active).toBe(false);
+    expect(generated.name).toBe("Email enquiries to Sheets — n8n Starter");
+    for (const n of generated.nodes) expect(n.credentials).toBeUndefined();
+    expect(generated.nodes.map((n: WorkflowNode) => n.name)).toEqual([
+      "START HERE",
+      "Gmail Trigger",
+      "1. Extract details",
+      "2. Append the row",
+    ]);
+    expect(Object.keys(generated.connections)).toEqual(["Gmail Trigger", "1. Extract details"]);
+  });
+
+  it("attaches a matching base64 copy and filename", () => {
+    expect(Buffer.from(String(out.workflowBase64), "base64").toString("utf8")).toBe(out.workflowJson);
+    expect(out.workflowFilename).toBe("email-enquiries-to-sheets-n8n-workflow.json");
+  });
+});
+
+describe("Code node: Build Blueprint Email", () => {
+  const config = { ownerEmail: "owner@example.com", senderName: "Blueprints", brandName: "Acme Automations" };
+  const input = {
+    status: "blueprint",
+    blueprint: SAMPLE_BLUEPRINT,
+    contact: { firstName: "Sam", email: "sam@example.com" },
+    workflowFilename: "email-enquiries-to-sheets-n8n-workflow.json",
+    capturedAt: "2026-10-06T12:00:00.000Z",
+  };
+
+  it("builds the email from validated fields with the configured brand", () => {
+    const out = runCodeNode("build-blueprint-email", input, { Configuration: config });
+    expect(out).toMatchObject({ recipient: "sam@example.com", ownerEmail: "owner@example.com", senderName: "Blueprints" });
+    expect(out.subject).toBe("Your automation blueprint + n8n workflow: Email enquiries to Sheets");
+    expect(String(out.html)).toContain("Acme Automations");
+    expect(String(out.html)).toContain("Hi Sam, here is the automation blueprint you requested.");
+  });
+
+  it("escapes agent and visitor text so it cannot inject markup", () => {
+    const evil = {
+      ...SAMPLE_BLUEPRINT,
+      name: "<script>alert(1)</script>",
+      problem: '<a href="https://evil.test">click</a>',
+    };
+    const out = runCodeNode(
+      "build-blueprint-email",
+      { ...input, blueprint: evil, contact: { firstName: "<b>Sam</b>", email: "sam@example.com" } },
+      { Configuration: config }
     );
-    expect(String(warning?.parameters.content)).toMatch(/never from a browser/i);
+    const html = String(out.html);
+    expect(html).not.toMatch(/<script|<a href|<b>Sam/);
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
   });
 
-  it("refuses to run until ownerEmail is configured", () => {
-    expect(runValidate({ ownerEmail: "you@example.com", body: sample })).toMatchObject({
-      valid: false,
-      statusCode: 500,
-    });
-  });
-
-  it("accepts the bundled sample request and sanitizes its HTML", () => {
-    const result = runValidate({
-      ownerEmail: "owner@example.com",
-      body: { ...sample, blueprintHtml: `${String(sample.blueprintHtml)}<script>x()</script>` },
-    });
-    expect(result).toMatchObject({
-      valid: true,
-      action: "send-blueprint",
-      recipient: sample.email,
-      ownerEmail: "owner@example.com",
-    });
-    expect(result.blueprintHtml).not.toContain("<script");
+  it("refuses to send until ownerEmail is configured", () => {
+    expect(() =>
+      runCodeNode("build-blueprint-email", input, { Configuration: { ...config, ownerEmail: "you@example.com" } })
+    ).toThrow(/Set ownerEmail/);
   });
 });

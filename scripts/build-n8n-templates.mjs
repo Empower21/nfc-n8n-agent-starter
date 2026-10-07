@@ -1,12 +1,14 @@
-// Builds n8n Creator Hub submissions from the production workflow export.
+// Builds the n8n Creator Hub submission from tracked sources.
 //
 //   node scripts/build-n8n-templates.mjs
 //
-// Production (n8n/discovery-agent-workflow.json) stays the source of truth.
-// This script derives credential-free, personal-data-free templates with the
-// sticky notes the Creator Hub requires, and writes them to n8n/templates/.
-// The Markdown descriptions in n8n/templates/*.md double as the yellow
-// overview sticky, so the submitted description and the canvas never drift.
+// Inputs:
+//   n8n/discovery-agent-workflow.json   production export (model + schema settings)
+//   n8n/templates/code/*.js             Code node bodies (tested in vitest)
+//   n8n/templates/code/system-prompt.md agent system message
+//   n8n/templates/<slug>.md             description, doubles as the overview sticky
+// Output:
+//   n8n/templates/<slug>.json           importable, credential-free template
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -15,6 +17,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE = resolve(ROOT, "n8n/discovery-agent-workflow.json");
 const OUT_DIR = resolve(ROOT, "n8n/templates");
+const CODE_DIR = resolve(OUT_DIR, "code");
 
 // n8n sticky colors: 1 = yellow (overview), 3 = red (warning),
 // 7 = white/neutral (sections).
@@ -22,29 +25,41 @@ const OVERVIEW_COLOR = 1;
 const WARNING_COLOR = 3;
 const SECTION_COLOR = 7;
 
-export const TEMPLATES = {
-  "discovery-agent": {
-    name: "Turn repetitive tasks into n8n automation blueprints with a Claude discovery agent",
-  },
-  "blueprint-delivery": {
-    name: "Email HTML automation blueprints with n8n workflow attachments via Gmail",
-  },
-};
+export const SLUG = "ai-automation-consultant";
+export const TITLE =
+  "Turn chat conversations into n8n automation blueprints with Claude, Gmail and Google Sheets";
 
-function readDescription(slug) {
-  // Normalize CRLF so Windows checkouts (core.autocrlf) build identical stickies.
-  return readFileSync(resolve(OUT_DIR, `${slug}.md`), "utf8").replace(/\r\n/g, "\n").trim();
+export const LEAD_COLUMNS = [
+  "Date",
+  "First Name",
+  "Email",
+  "Automation",
+  "Problem",
+  "Hours Saved per Week",
+  "Complexity",
+  "Session ID",
+];
+
+// Normalize CRLF so Windows checkouts (core.autocrlf) build identical output.
+const read = (file) => readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+
+export function codeNodeSource(name) {
+  return read(resolve(CODE_DIR, `${name}.js`));
+}
+
+export function systemPrompt() {
+  return read(resolve(CODE_DIR, "system-prompt.md")).trim();
 }
 
 // The overview sticky is the description with headings demoted one level, as
 // the sticky note guidelines ask for `### How it works` / `### Setup`.
-export function overviewContent(slug) {
-  const body = readDescription(slug).replace(/^## /gm, "### ");
-  return `## ${TEMPLATES[slug].name}\n\n${body}`;
+export function overviewContent() {
+  const body = read(resolve(OUT_DIR, `${SLUG}.md`)).trim().replace(/^## /gm, "### ");
+  return `## ${TITLE}\n\n${body}`;
 }
 
 function sourceNodes() {
-  const workflow = JSON.parse(readFileSync(SOURCE, "utf8"));
+  const workflow = JSON.parse(read(SOURCE));
   return new Map(workflow.nodes.map((node) => [node.name, node]));
 }
 
@@ -56,311 +71,192 @@ function take(nodes, name, overrides = {}) {
   return { ...copy, ...overrides };
 }
 
-function sticky(id, name, content, position, width, height, color) {
-  return {
-    id,
-    name,
-    type: "n8n-nodes-base.stickyNote",
-    typeVersion: 1,
-    position,
-    parameters: { content, width, height, color },
-  };
+let idCounter = 0;
+const nextId = () => `7a3c1e90-5b2d-4f6a-9c84-${String(++idCounter).padStart(12, "0")}`;
+
+function node(name, type, typeVersion, position, parameters, extra = {}) {
+  return { id: nextId(), name, type, typeVersion, position, parameters, ...extra };
 }
 
-function configuration(id, position, assignments) {
-  return {
-    id,
-    name: "Configuration",
-    type: "n8n-nodes-base.set",
-    typeVersion: 3.4,
-    position,
-    parameters: {
-      mode: "manual",
-      includeOtherFields: true,
-      assignments: {
-        assignments: assignments.map(([assignmentId, name, type, value]) => ({
-          id: assignmentId,
-          name,
-          type,
-          value,
-        })),
+function sticky(name, content, position, width, height, color) {
+  return node(name, "n8n-nodes-base.stickyNote", 1, position, { content, width, height, color });
+}
+
+function setNode(name, position, assignments, includeOtherFields) {
+  return node(name, "n8n-nodes-base.set", 3.4, position, {
+    mode: "manual",
+    ...(includeOtherFields ? { includeOtherFields: true } : {}),
+    assignments: {
+      assignments: assignments.map(([field, type, value]) => ({ id: nextId(), name: field, type, value })),
+    },
+    options: {},
+  });
+}
+
+function codeNode(name, position, file) {
+  return node(name, "n8n-nodes-base.code", 2, position, { jsCode: codeNodeSource(file) });
+}
+
+const main = (target, index = 0) => ({ node: target, type: "main", index });
+const ai = (target, type) => ({ node: target, type, index: 0 });
+
+// Contact is required for delivery; Enforce Contract downgrades a blueprint
+// without one to a question asking for it.
+function outputSchema(nodes) {
+  const schema = JSON.parse(take(nodes, "Structured Output").parameters.inputSchema);
+  schema.properties.contact = {
+    type: "object",
+    description: "Required when status is blueprint: the visitor's first name and email.",
+    properties: { firstName: { type: "string" }, email: { type: "string" } },
+    required: ["firstName", "email"],
+  };
+  return JSON.stringify(schema, null, 2);
+}
+
+function buildConsultant(nodes) {
+  idCounter = 0;
+  const email = (field) => `={{ $('Build Blueprint Email').first().json.${field} }}`;
+
+  const chatTrigger = node("When chat message received", "@n8n/n8n-nodes-langchain.chatTrigger", 1.4, [560, 200], {
+    public: true,
+    initialMessages:
+      "Hi! Tell me one repetitive task you'd love to hand off, and I'll design an n8n automation for it.",
+    options: {},
+  }, { webhookId: "7a3c1e90-5b2d-4f6a-9c84-0000000000ff" });
+
+  const agent = take(nodes, "Discovery Agent", { position: [1160, 200], onError: "continueRegularOutput" });
+  agent.parameters = {
+    ...agent.parameters,
+    promptType: "define",
+    text: "={{ $json.chatInput }}",
+    hasOutputParser: true,
+    options: { systemMessage: `=${systemPrompt()}` },
+  };
+
+  const parser = take(nodes, "Structured Output", { position: [1560, 460] });
+  parser.parameters = { ...parser.parameters, inputSchema: outputSchema(nodes) };
+
+  const workflowNodes = [
+    sticky("Overview", overviewContent(), [0, -140], 480, 1060, OVERVIEW_COLOR),
+    sticky("Section: Chat", "## 1. Chat\nHosted n8n chat. Settings live in Configuration.", [500, -140], 520, 600, SECTION_COLOR),
+    sticky("Warning: Public chat", "## Public chat\nAnyone with the link can request an email. Turn on authentication or embed the chat on a page you control.", [520, -40], 220, 440, WARNING_COLOR),
+    sticky("Section: Discovery agent", "## 2. Discovery agent\nClaude asks one question per turn, remembers the chat, and returns strict JSON.", [1060, -140], 760, 1000, SECTION_COLOR),
+    sticky("Section: Reply or build", "## 3. Reply or build\nQuestions go back to the chat. A ready blueprint becomes a workflow file and an email.", [1860, -140], 700, 640, SECTION_COLOR),
+    sticky("Section: Deliver and log", "## 4. Deliver and log\nEmail the visitor (you are BCC'd), log the lead, confirm in the chat.", [2600, -140], 960, 640, SECTION_COLOR),
+
+    chatTrigger,
+    setNode("Configuration", [800, 200], [
+      ["ownerEmail", "string", "you@example.com"],
+      ["senderName", "string", "Automation Blueprints"],
+      ["brandName", "string", "Automation Blueprint"],
+      ["maxFollowUps", "number", 5],
+    ], true),
+    agent,
+    take(nodes, "Anthropic Chat Model", { position: [1100, 460] }),
+    node("Simple Memory", "@n8n/n8n-nodes-langchain.memoryBufferWindow", 1.4, [1330, 460], { contextWindowLength: 30 }),
+    parser,
+    take(nodes, "Fixer Model", { position: [1640, 680] }),
+    codeNode("Enforce Contract", [1600, 200], "enforce-contract"),
+
+    node("Blueprint Ready?", "n8n-nodes-base.if", 2.2, [1900, 200], {
+      conditions: {
+        options: { caseSensitive: true, leftValue: "", typeValidation: "strict", version: 2 },
+        conditions: [{
+          id: nextId(),
+          leftValue: "={{ $json.status }}",
+          rightValue: "blueprint",
+          operator: { type: "string", operation: "equals" },
+        }],
+        combinator: "and",
       },
       options: {},
-    },
-  };
-}
+    }),
+    setNode("Reply with Question", [2140, 340], [["output", "string", "={{ $json.chatReply }}"]], false),
+    codeNode("Build n8n Starter Workflow", [2140, 80], "build-starter-workflow"),
+    codeNode("Build Blueprint Email", [2360, 80], "build-blueprint-email"),
 
-function replaceOrThrow(text, pattern, replacement, label) {
-  const next = text.replace(pattern, replacement);
-  if (next === text) throw new Error(`Template transform did not apply: ${label}`);
-  return next;
-}
-
-function main(target, index = 0) {
-  return { node: target, type: "main", index };
-}
-
-function buildDiscoveryAgent(nodes) {
-  const webhook = take(nodes, "Discovery Webhook", { position: [540, 240] });
-  webhook.parameters = {
-    ...webhook.parameters,
-    path: "automation-discovery",
-    authentication: "headerAuth",
-  };
-
-  const prompt = take(nodes, "Validate Request", {
-    name: "Build Agent Prompt",
-    position: [980, 240],
-  });
-  const [, , , promptAssignment] = prompt.parameters.assignments.assignments;
-  prompt.parameters.assignments.assignments = [
-    {
-      id: "4b416991-b2c6-48ab-a385-e61f73786d17",
-      name: "valid",
-      type: "boolean",
-      value: "={{ String(($json.body || {}).message || '').trim().length >= 3 }}",
-    },
-    { id: "c759478a-0944-4216-86e7-cd3ac2400df4", name: "statusCode", type: "number", value: 400 },
-    { id: "a35d0138-4f46-4aef-81e4-4e41f78cd6bb", name: "error", type: "string", value: "A message is required." },
-    {
-      ...promptAssignment,
-      value: replaceOrThrow(
-        promptAssignment.value,
-        "var max = 5;",
-        "var max = Number($json.maxFollowUps) || 5;",
-        "maxFollowUps"
-      ),
-    },
-  ];
-
-  const gate = take(nodes, "Authorized?", { name: "Message Present?", position: [1200, 240] });
-  gate.parameters.conditions.conditions[0].leftValue = "={{ $json.valid }}";
-
-  const agent = take(nodes, "Discovery Agent", { position: [1720, 240] });
-  agent.parameters.options.systemMessage = replaceOrThrow(
-    agent.parameters.options.systemMessage,
-    "tapped an NFC card and told you",
-    "told you",
-    "system message NFC reference"
-  );
-
-  const guard = take(nodes, "Enforce Contract", { position: [2280, 240] });
-  guard.parameters.jsCode = replaceOrThrow(
-    guard.parameters.jsCode,
-    "// an object that satisfies agentResponseSchema in lib/n8n/types.ts.",
-    "// an object that matches the Structured Output schema.",
-    "contract comment"
-  );
-
-  const workflowNodes = [
-    sticky("0b1f3c52-8a51-4b0e-9a61-1d2f7c000001", "Overview", overviewContent("discovery-agent"), [0, -100], 460, 940, OVERVIEW_COLOR),
-    sticky("0b1f3c52-8a51-4b0e-9a61-1d2f7c000002", "Section: Receive and validate", "## 1. Receive and validate\nThe webhook checks the secret header, then builds the prompt from the message and history.", [480, -100], 1100, 560, SECTION_COLOR),
-    sticky("0b1f3c52-8a51-4b0e-9a61-1d2f7c000003", "Section: Discovery agent", "## 2. Discovery agent\nClaude asks one question per turn, then returns a structured blueprint.", [1620, -100], 560, 940, SECTION_COLOR),
-    sticky("0b1f3c52-8a51-4b0e-9a61-1d2f7c000004", "Section: Guard and respond", "## 3. Guard and respond\nThe response always matches one contract, even when the model misbehaves.", [2220, -100], 500, 560, SECTION_COLOR),
-    webhook,
-    configuration("0b1f3c52-8a51-4b0e-9a61-1d2f7c000010", [760, 240], [
-      ["0b1f3c52-8a51-4b0e-9a61-1d2f7c000011", "maxFollowUps", "number", 5],
-    ]),
-    prompt,
-    gate,
-    take(nodes, "Reject", { name: "Reject Empty Message", position: [1420, 40] }),
-    agent,
-    take(nodes, "Anthropic Chat Model", { position: [1660, 520] }),
-    take(nodes, "Structured Output", { position: [1900, 520] }),
-    take(nodes, "Fixer Model", { position: [1980, 680] }),
-    guard,
-    take(nodes, "Respond", { position: [2500, 240] }),
-  ];
-
-  return {
-    name: TEMPLATES["discovery-agent"].name,
-    active: false,
-    nodes: workflowNodes,
-    connections: {
-      "Discovery Webhook": { main: [[main("Configuration")]] },
-      Configuration: { main: [[main("Build Agent Prompt")]] },
-      "Build Agent Prompt": { main: [[main("Message Present?")]] },
-      "Message Present?": { main: [[main("Discovery Agent")], [main("Reject Empty Message")]] },
-      "Discovery Agent": { main: [[main("Enforce Contract")]] },
-      "Enforce Contract": { main: [[main("Respond")]] },
-      "Anthropic Chat Model": { ai_languageModel: [[{ node: "Discovery Agent", type: "ai_languageModel", index: 0 }]] },
-      "Structured Output": { ai_outputParser: [[{ node: "Discovery Agent", type: "ai_outputParser", index: 0 }]] },
-      "Fixer Model": { ai_languageModel: [[{ node: "Structured Output", type: "ai_languageModel", index: 0 }]] },
-    },
-    pinData: {
-      "Discovery Webhook": [
-        {
-          json: {
-            headers: {},
-            params: {},
-            query: {},
-            body: {
-              message: "Every morning I manually copy customer enquiries from email into Excel.",
-              history: [],
-            },
-          },
-        },
-      ],
-    },
-    settings: { executionOrder: "v1" },
-  };
-}
-
-// Defense in depth for caller-supplied HTML. The caller must still build the
-// HTML server-side with every value escaped; this strips what would turn the
-// owner's Gmail into a phishing relay if that contract is broken.
-export const SANITIZE_HTML_SOURCE = `function sanitizeHtml(html) {
-  const blocked = 'script|iframe|frame|frameset|object|embed|applet|form|input|button|textarea|select|base';
-  return String(html)
-    .replace(new RegExp('<\\\\s*(' + blocked + ')\\\\b[\\\\s\\\\S]*?<\\\\s*\\\\/\\\\s*\\\\1\\\\s*>', 'gi'), '')
-    .replace(new RegExp('<\\\\s*\\\\/?\\\\s*(' + blocked + ')\\\\b[^>]*>', 'gi'), '')
-    .replace(/<\\s*meta\\b[^>]*http-equiv[^>]*>/gi, '')
-    .replace(/\\s+on[a-z]+\\s*=\\s*("[^"]*"|'[^']*'|[^\\s>]+)/gi, '')
-    .replace(/\\b(href|src|action|formaction)\\s*=\\s*(["']?)\\s*(?:javascript|vbscript|data):[^"'\\s>]*\\2/gi, '$1="#"');
-}`;
-
-const VALIDATE_LEAD_CODE = `${SANITIZE_HTML_SOURCE}
-
-const input = $input.first().json;
-const body = input.body || {};
-const fail = function (statusCode, error) { return [{ json: { valid: false, statusCode: statusCode, error: error } }]; };
-const EMAIL = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
-
-const ownerEmail = String(input.ownerEmail || '').trim().toLowerCase();
-if (!EMAIL.test(ownerEmail) || ownerEmail === 'you@example.com') {
-  return fail(500, 'Set ownerEmail in the Configuration node.');
-}
-
-if (!body || typeof body !== 'object') {
-  return fail(400, 'Invalid request body.');
-}
-
-const action = body.action;
-if (action !== 'send-blueprint' && action !== 'build-request') {
-  return fail(400, 'Invalid action.');
-}
-
-const firstName = String(body.firstName || '').trim().replace(/[\\r\\n]+/g, ' ');
-const email = String(body.email || '').trim().toLowerCase();
-const blueprintName = String(body.blueprintName || (body.blueprint && body.blueprint.name) || '').trim().replace(/[\\r\\n]+/g, ' ');
-const blueprintMarkdown = String(body.blueprintMarkdown || '').trim();
-
-if (!firstName || firstName.length > 80) {
-  return fail(400, 'Invalid first name.');
-}
-if (!EMAIL.test(email) || email.length > 200) {
-  return fail(400, 'Invalid email.');
-}
-if (!blueprintName || blueprintName.length > 120 || blueprintMarkdown.length < 20 || blueprintMarkdown.length > 30000) {
-  return fail(400, 'Complete blueprint content is required.');
-}
-if (typeof body.blueprintHtml !== 'string' || body.blueprintHtml.length < 50 || body.blueprintHtml.length > 200000) {
-  return fail(400, 'Complete blueprint content is required.');
-}
-const blueprintHtml = sanitizeHtml(body.blueprintHtml);
-
-// Optional: where the request came from (a form, a QR code, an NFC tag, ...).
-const sourceId = String((body.session && body.session.cardId) || body.source || 'unknown');
-const capturedAt = String(body.capturedAt || new Date().toISOString());
-const recipient = action === 'send-blueprint' ? email : ownerEmail;
-const subject = action === 'send-blueprint'
-  ? 'Your automation blueprint: ' + blueprintName
-  : 'Build request: ' + firstName + ' (' + blueprintName + ')';
-const message = action === 'send-blueprint'
-  ? 'Hi ' + firstName + ',\\n\\nHere is the automation blueprint you requested.\\n\\n' + blueprintMarkdown + '\\n\\nSource: ' + sourceId + '\\nRequested: ' + capturedAt + '\\n\\nReply to this email if you would like help building it.'
-  : 'Action: Build request\\nName: ' + firstName + '\\nEmail: ' + email + '\\nBlueprint: ' + blueprintName + '\\nSource: ' + sourceId + '\\nCaptured: ' + capturedAt + '\\n\\n' + blueprintMarkdown;
-
-return [{ json: {
-  valid: true,
-  statusCode: 200,
-  action: action,
-  firstName: firstName,
-  email: email,
-  blueprintName: blueprintName,
-  blueprintMarkdown: blueprintMarkdown,
-  blueprintHtml: blueprintHtml,
-  ownerEmail: ownerEmail,
-  recipient: recipient,
-  subject: subject,
-  message: message,
-  sourceId: sourceId,
-  capturedAt: capturedAt
-} }];`;
-
-function buildBlueprintDelivery(nodes) {
-  const webhook = take(nodes, "Lead Webhook", { position: [540, 200] });
-  webhook.parameters = {
-    ...webhook.parameters,
-    path: "blueprint-delivery",
-    authentication: "headerAuth",
-  };
-
-  const validate = take(nodes, "Validate + Format Lead", { position: [980, 200] });
-  validate.parameters.jsCode = VALIDATE_LEAD_CODE;
-
-  const senderName = "={{ $('Configuration').first().json.senderName }}";
-  const gmail = (name, position) => {
-    const node = take(nodes, name, { position });
-    // Send the sanitized copy, never the raw request body.
-    node.parameters.message = "={{ $('Validate + Format Lead').first().json.blueprintHtml }}";
-    node.parameters.options = { ...node.parameters.options, senderName };
-    return node;
-  };
-
-  const workflowNodes = [
-    sticky("5c2e9d14-3f7a-4c61-8b20-6e4a9b000001", "Overview", overviewContent("blueprint-delivery"), [0, -100], 460, 960, OVERVIEW_COLOR),
-    sticky("5c2e9d14-3f7a-4c61-8b20-6e4a9b000002", "Section: Receive and validate", "## 1. Receive and validate\nChecks the secret header and every field, then picks the recipient.", [480, -100], 900, 560, SECTION_COLOR),
-    sticky("5c2e9d14-3f7a-4c61-8b20-6e4a9b000003", "Section: Build the attachment", "## 2. Build the attachment\nOnly inactive, importable workflow JSON becomes a file.", [1420, -100], 700, 620, SECTION_COLOR),
-    sticky("5c2e9d14-3f7a-4c61-8b20-6e4a9b000005", "Warning: Server-side only", "## Server-side only\nCall this webhook from your backend, never from a browser. Escape every value in `blueprintHtml` before sending.", [500, -60], 240, 420, WARNING_COLOR),
-    sticky("5c2e9d14-3f7a-4c61-8b20-6e4a9b000004", "Section: Send and confirm", "## 3. Send and confirm\nVisitor gets the blueprint (you are BCC'd). Build requests go only to you.", [2160, -100], 920, 620, SECTION_COLOR),
-    webhook,
-    configuration("5c2e9d14-3f7a-4c61-8b20-6e4a9b000010", [760, 200], [
-      ["5c2e9d14-3f7a-4c61-8b20-6e4a9b000011", "ownerEmail", "string", "you@example.com"],
-      ["5c2e9d14-3f7a-4c61-8b20-6e4a9b000012", "senderName", "string", "Automation Blueprints"],
-    ]),
-    validate,
-    take(nodes, "Valid Request?", { position: [1200, 200] }),
-    take(nodes, "Create Workflow Attachment", { position: [1460, 120] }),
-    take(nodes, "Attachment Valid?", { position: [1680, 120] }),
-    take(nodes, "Workflow JSON to File", { position: [1900, 0] }),
-    take(nodes, "Reject Request", { position: [1900, 340] }),
-    take(nodes, "Merge Email + File", { position: [2200, 120] }),
-    take(nodes, "Send Blueprint?", { position: [2420, 120] }),
-    gmail("Email Blueprint to Visitor", [2640, 0]),
-    gmail("Email Build Request to Owner", [2640, 260]),
-    take(nodes, "Confirm Blueprint Delivery", { position: [2880, 0] }),
-    take(nodes, "Confirm Build Request", { position: [2880, 260] }),
-  ];
-
-  return {
-    name: TEMPLATES["blueprint-delivery"].name,
-    active: false,
-    nodes: workflowNodes,
-    connections: {
-      "Lead Webhook": { main: [[main("Configuration")]] },
-      Configuration: { main: [[main("Validate + Format Lead")]] },
-      "Validate + Format Lead": { main: [[main("Valid Request?")]] },
-      "Valid Request?": { main: [[main("Create Workflow Attachment")], [main("Reject Request")]] },
-      "Create Workflow Attachment": { main: [[main("Attachment Valid?")]] },
-      "Attachment Valid?": {
-        main: [[main("Workflow JSON to File"), main("Merge Email + File")], [main("Reject Request")]],
+    node("Workflow JSON to File", "n8n-nodes-base.convertToFile", 1.1, [2660, 80], {
+      operation: "toBinary",
+      sourceProperty: "workflowBase64",
+      binaryPropertyName: "workflow",
+      options: { fileName: "={{ $json.workflowFilename }}", mimeType: "application/json" },
+    }),
+    node("Email Blueprint to Visitor", "n8n-nodes-base.gmail", 2.2, [2880, 80], {
+      sendTo: email("recipient"),
+      subject: email("subject"),
+      emailType: "html",
+      message: email("html"),
+      options: {
+        appendAttribution: false,
+        bccList: email("ownerEmail"),
+        attachmentsUi: { attachmentsBinary: [{ property: "workflow" }] },
+        senderName: email("senderName"),
       },
-      "Workflow JSON to File": { main: [[main("Merge Email + File", 1)]] },
-      "Merge Email + File": { main: [[main("Send Blueprint?")]] },
-      "Send Blueprint?": { main: [[main("Email Blueprint to Visitor")], [main("Email Build Request to Owner")]] },
-      "Email Blueprint to Visitor": { main: [[main("Confirm Blueprint Delivery")]] },
-      "Email Build Request to Owner": { main: [[main("Confirm Build Request")]] },
+    }),
+    node("Log Lead in Google Sheets", "n8n-nodes-base.googleSheets", 4.7, [3100, 80], {
+      operation: "append",
+      documentId: { __rl: true, value: "", mode: "list", cachedResultName: "" },
+      sheetName: { __rl: true, value: "", mode: "list", cachedResultName: "" },
+      columns: {
+        mappingMode: "defineBelow",
+        value: {
+          Date: email("capturedAt"),
+          "First Name": email("contact.firstName"),
+          Email: email("contact.email"),
+          Automation: email("blueprint.name"),
+          Problem: email("blueprint.problem"),
+          "Hours Saved per Week": "={{ $('Build Blueprint Email').first().json.blueprint.estimatedHoursSavedPerWeek ?? 'Unknown' }}",
+          Complexity: email("blueprint.complexity"),
+          "Session ID": "={{ $('When chat message received').first().json.sessionId }}",
+        },
+        matchingColumns: [],
+        schema: LEAD_COLUMNS.map((column) => ({
+          id: column,
+          displayName: column,
+          required: false,
+          defaultMatch: false,
+          display: true,
+          type: "string",
+          canBeUsedToMatch: true,
+        })),
+        attemptToConvertTypes: false,
+        convertFieldsToString: false,
+      },
+      options: {},
+    }),
+    setNode("Reply with Confirmation", [3320, 80], [[
+      "output",
+      "string",
+      "=Done, {{ $('Build Blueprint Email').first().json.contact.firstName }}! I've emailed **{{ $('Build Blueprint Email').first().json.blueprint.name }}** to {{ $('Build Blueprint Email').first().json.contact.email }}, with an importable n8n workflow attached.\n\n**How it runs**\n{{ $('Build Blueprint Email').first().json.blueprint.steps.map((step, i) => (i + 1) + '. ' + step.title).join('\\n') }}\n\nWant to change anything? Just tell me.",
+    ]], false),
+  ];
+
+  return {
+    name: TITLE,
+    active: false,
+    nodes: workflowNodes,
+    connections: {
+      "When chat message received": { main: [[main("Configuration")]] },
+      Configuration: { main: [[main("Discovery Agent")]] },
+      "Discovery Agent": { main: [[main("Enforce Contract")]] },
+      "Anthropic Chat Model": { ai_languageModel: [[ai("Discovery Agent", "ai_languageModel")]] },
+      "Simple Memory": { ai_memory: [[ai("Discovery Agent", "ai_memory")]] },
+      "Structured Output": { ai_outputParser: [[ai("Discovery Agent", "ai_outputParser")]] },
+      "Fixer Model": { ai_languageModel: [[ai("Structured Output", "ai_languageModel")]] },
+      "Enforce Contract": { main: [[main("Blueprint Ready?")]] },
+      "Blueprint Ready?": { main: [[main("Build n8n Starter Workflow")], [main("Reply with Question")]] },
+      "Build n8n Starter Workflow": { main: [[main("Build Blueprint Email")]] },
+      "Build Blueprint Email": { main: [[main("Workflow JSON to File")]] },
+      "Workflow JSON to File": { main: [[main("Email Blueprint to Visitor")]] },
+      "Email Blueprint to Visitor": { main: [[main("Log Lead in Google Sheets")]] },
+      "Log Lead in Google Sheets": { main: [[main("Reply with Confirmation")]] },
     },
     settings: { executionOrder: "v1" },
   };
 }
 
 export function buildTemplates() {
-  const nodes = sourceNodes();
-  return {
-    "discovery-agent": buildDiscoveryAgent(nodes),
-    "blueprint-delivery": buildBlueprintDelivery(nodes),
-  };
+  return { [SLUG]: buildConsultant(sourceNodes()) };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
