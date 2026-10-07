@@ -5,18 +5,25 @@ export type Json = Record<string, unknown>;
 /**
  * Run an n8n Code node body (top-level return, `$input`, `$('Node')`) with a
  * single input item, the way n8n executes "Run Once for All Items".
+ * `staticData` stands in for $getWorkflowStaticData('global') and is mutated.
  */
-export function runCodeNode(file: string, input: Json, nodes: Record<string, Json> = {}): Json {
-  const run = new Function("$input", "$", "Buffer", codeNodeSource(file)) as (
+export function runCodeNode(
+  file: string,
+  input: Json,
+  nodes: Record<string, Json> = {},
+  staticData: Json = {}
+): Json {
+  const run = new Function("$input", "$", "$getWorkflowStaticData", "Buffer", codeNodeSource(file)) as (
     input: unknown,
     lookup: unknown,
+    getStaticData: unknown,
     buffer: typeof Buffer
   ) => { json: Json }[];
   const lookup = (name: string) => {
     if (!(name in nodes)) throw new Error(`Unexpected node lookup: ${name}`);
     return { first: () => ({ json: nodes[name] }) };
   };
-  const out = run({ first: () => ({ json: input }), all: () => [{ json: input }] }, lookup, Buffer);
+  const out = run({ first: () => ({ json: input }), all: () => [{ json: input }] }, lookup, () => staticData, Buffer);
   if (!Array.isArray(out) || out.length !== 1) throw new Error(`${file} must return exactly one item`);
   return out[0].json;
 }

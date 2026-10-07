@@ -199,16 +199,9 @@ function buildConsultant(nodes) {
       sheetName: { __rl: true, value: "", mode: "list", cachedResultName: "" },
       columns: {
         mappingMode: "defineBelow",
-        value: {
-          Date: email("capturedAt"),
-          "First Name": email("contact.firstName"),
-          Email: email("contact.email"),
-          Automation: email("blueprint.name"),
-          Problem: email("blueprint.problem"),
-          "Hours Saved per Week": "={{ $('Build Blueprint Email').first().json.blueprint.estimatedHoursSavedPerWeek ?? 'Unknown' }}",
-          Complexity: email("blueprint.complexity"),
-          "Session ID": "={{ $('When chat message received').first().json.sessionId }}",
-        },
+        value: Object.fromEntries(
+          LEAD_COLUMNS.map((column) => [column, `={{ $('Build Blueprint Email').first().json.leadRow['${column}'] }}`])
+        ),
         matchingColumns: [],
         schema: LEAD_COLUMNS.map((column) => ({
           id: column,
@@ -222,7 +215,9 @@ function buildConsultant(nodes) {
         attemptToConvertTypes: false,
         convertFieldsToString: false,
       },
-      options: {},
+      // RAW stores values literally, so visitor text like "=IMPORTXML(...)"
+      // can never run as a formula in the owner's sheet.
+      options: { cellFormat: "RAW" },
     }),
     setNode("Reply with Confirmation", [3320, 80], [[
       "output",

@@ -141,6 +141,13 @@ if (!/^[^s@]+@[^s@]+.[^s@]+$/.test(ownerEmail) || ownerEmail === 'you@example.co
   throw new Error('Set ownerEmail in the Configuration node before delivering blueprints.');
 }
 
+// Neutralize spreadsheet formula prefixes (defence in depth; the Sheets node
+// also writes RAW values) so visitor text can never run as a formula.
+function cellSafe(value) {
+  const text = value === null || value === undefined ? '' : String(value);
+  return /^[=+\-@\t\r]/.test(text) ? "'" + text : text;
+}
+
 const item = $input.first().json;
 const capturedAt = item.capturedAt || new Date().toISOString();
 const html = blueprintToEmailHtml(item.blueprint, {
@@ -159,6 +166,17 @@ return [{
     recipient: item.contact.email,
     ownerEmail: ownerEmail,
     senderName: String(config.senderName || 'Automation Blueprints'),
-    subject: 'Your automation blueprint + n8n workflow: ' + item.blueprint.name,
+    // Fixed subject: no AI- or visitor-controlled text in the subject line.
+    subject: 'Your automation blueprint and n8n workflow are ready',
+    leadRow: {
+      'Date': capturedAt,
+      'First Name': cellSafe(item.contact.firstName),
+      'Email': cellSafe(item.contact.email),
+      'Automation': cellSafe(item.blueprint.name),
+      'Problem': cellSafe(item.blueprint.problem),
+      'Hours Saved per Week': item.blueprint.estimatedHoursSavedPerWeek === null ? 'Unknown' : String(item.blueprint.estimatedHoursSavedPerWeek),
+      'Complexity': cellSafe(item.blueprint.complexity),
+      'Session ID': cellSafe($('When chat message received').first().json.sessionId),
+    },
   }),
 }];

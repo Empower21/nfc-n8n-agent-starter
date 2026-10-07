@@ -4,7 +4,40 @@
 // blueprint is ready to deliver.
 const FALLBACK_MESSAGE = 'Sorry, I lost my train of thought for a second. Could you tell me once more which repetitive task you would most like to hand off?';
 const ASK_CONTACT = 'Your blueprint is ready! What is your first name, and which email address should I send it to?';
+const LIMIT_REACHED = "I've already sent the blueprint to that address. Check your inbox (and spam folder), or tell me what you'd like to change in the design.";
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Abuse guard for the public chat: at most 2 emails per chat session and 3
+// per recipient per 24 hours. Only a hash of each address is stored.
+// Workflow static data persists in production (active) executions only.
+const SEND_LIMITS = { perSession: 2, perRecipientPerDay: 3, windowMs: 24 * 60 * 60 * 1000 };
+
+function hash(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16);
+}
+
+function reserveSend(email) {
+  const data = $getWorkflowStaticData('global');
+  const now = Date.now();
+  const sessionId = String($('When chat message received').first().json.sessionId || 'unknown');
+  const sends = (Array.isArray(data.blueprintSends) ? data.blueprintSends : [])
+    .filter(function (s) { return now - s.at < SEND_LIMITS.windowMs; });
+  const recipient = hash(email);
+  const bySession = sends.filter(function (s) { return s.session === sessionId; }).length;
+  const byRecipient = sends.filter(function (s) { return s.recipient === recipient; }).length;
+  if (bySession >= SEND_LIMITS.perSession || byRecipient >= SEND_LIMITS.perRecipientPerDay) {
+    data.blueprintSends = sends;
+    return false;
+  }
+  sends.push({ at: now, session: sessionId, recipient: recipient });
+  data.blueprintSends = sends.slice(-500);
+  return true;
+}
 
 function str(value, max) {
   if (value === null || value === undefined) return '';
@@ -88,7 +121,9 @@ let response = question(FALLBACK_MESSAGE);
 if (candidate && candidate.status === 'blueprint') {
   const blueprint = cleanBlueprint(candidate.blueprint);
   const contact = cleanContact(candidate.contact);
-  if (blueprint && contact) {
+  if (blueprint && contact && !reserveSend(contact.email)) {
+    response = question(LIMIT_REACHED);
+  } else if (blueprint && contact) {
     const message = str(candidate.message, 300) || 'Here is your automation blueprint.';
     response = { status: 'blueprint', message: message, chatReply: message, blueprint: blueprint, contact: contact };
   } else if (blueprint) {

@@ -12,7 +12,7 @@ const eslintConfig = defineConfig([
     languageOptions: {
       sourceType: "script",
       parserOptions: { ecmaFeatures: { globalReturn: true } },
-      globals: { $input: "readonly", $: "readonly", Buffer: "readonly" },
+      globals: { $input: "readonly", $: "readonly", $getWorkflowStaticData: "readonly", Buffer: "readonly" },
     },
   },
   // Override default ignores of eslint-config-next.
